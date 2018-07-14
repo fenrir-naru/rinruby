@@ -114,7 +114,7 @@ def initialize(*args)
     opts[:port_number]=args.shift unless args.size==0
     opts[:port_width]=args.shift unless args.size==0
   end
-  default_opts= {:echo=>true, :interactive=>true, :executable=>nil, :port_number=>38442, :port_width=>1000, :hostname=>'127.0.0.1'}
+  default_opts= {:echo=>true, :interactive=>true, :executable=>nil, :port_number=>38442, :port_width=>1000, :hostname=>'127.0.0.1', :persistent => true}
 
     @opts=default_opts.merge(opts)
     @port_width=@opts[:port_width]
@@ -168,6 +168,7 @@ def initialize(*args)
     @writer.puts <<-EOF
       assign("#{RinRuby_Env}", new.env(), baseenv())
     EOF
+    @socket = []
     r_rinruby_socket_io
     r_rinruby_get_value
     r_rinruby_pull
@@ -515,13 +516,41 @@ def initialize(*args)
   #:startdoc:
 
   def r_rinruby_socket_io
+    if @opts[:persistent] then
+      @writer.puts <<-EOF
+        #{RinRuby_Socket} <- list()
+        #{RinRuby_Env}$session <- function(f){
+          i <- 1
+          while(i <= length(#{RinRuby_Socket})){
+            if(#{RinRuby_Socket}[[i]]$free){
+              #{RinRuby_Socket}[[i]]$free <- F
+              break
+            }
+            i <- i + 1
+          }
+          if(i > length(#{RinRuby_Socket})){
+            #{RinRuby_Socket}[[i]] <- list(
+                socket=socketConnection(
+                  "#{@hostname}", #{@port_number}, blocking=TRUE, open="rb", timeout=NULL),
+                free=F)
+          }
+          res <- f(#{RinRuby_Socket}[[i]]$socket)
+          #{RinRuby_Socket}[[i]]$free <- T
+          invisible(res)
+        }
+      EOF
+    else
+      @writer.puts <<-EOF
+        #{RinRuby_Env}$session <- function(f){
+          con <- socketConnection(
+              "#{@hostname}", #{@port_number}, blocking=TRUE, open="rb", timeout=NULL)
+          res <- f(con)
+          close(con)
+          invisible(res)
+        }
+      EOF
+    end
     @writer.puts <<-EOF
-      #{RinRuby_Env}$session <- function(f){
-        con <- socketConnection("#{@hostname}", #{@port_number}, blocking=TRUE, open="rb")
-        res <- f(con)
-        close(con)
-        invisible(res)
-      }
       #{RinRuby_Env}$write <- function(con, v, ...){
         invisible(lapply(list(v, ...), function(v2){
             writeBin(v2, con, endian="big")}))
@@ -618,13 +647,29 @@ def initialize(*args)
     end
   end
   
-  def socket_session(r_exp, &b)
+  def socket_session(expr_R, &b)
     socket = nil
-    t = Thread::new{socket = @server_socket.accept}
-    @writer.puts r_exp
-    t.join
+    t = nil
+    while (socket = @socket.pop) # check whether socket is still alive
+      break unless socket.closed?
+      @writer.puts <<-EOF # take care; @socket and RinRuby_Socket are opposite ordered
+        for(i in 1:length(#{RinRuby_Socket})){
+          if(!#{RinRuby_Socket}[[i]]$free){next}
+          tryCatch(
+              close(#{RinRuby_Socket}[[i]]$socket),
+              warning=function(w){}, error=function(e){})
+          #{RinRuby_Socket}[[i]] <- NULL
+          break
+        }
+      EOF
+    end
+    unless socket
+      t = Thread::new{socket = @server_socket.accept}
+    end
+    @writer.puts expr_R
+    t.join if t
     res = b.call(socket)
-    socket.close
+    @opts[:persistent] ? @socket.push(socket) : socket.close # reuse or close
     res
   end
 
