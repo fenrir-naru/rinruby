@@ -516,34 +516,26 @@ def initialize(*args)
   #:startdoc:
 
   def r_rinruby_socket_io
-    if @opts[:persistent] then
-      @writer.puts <<-EOF
-        #{RinRuby_Socket} <- list()
-        #{RinRuby_Env}$session.new <- function(f){
-          i <- length(#{RinRuby_Socket}) + 1
-          #{RinRuby_Socket}[[i]] <- socketConnection(
-              "#{@hostname}", #{@port_number}, blocking=TRUE, open="rb", timeout=NULL)
+    @writer.puts <<-EOF
+      #{RinRuby_Socket} <- list()
+      #{RinRuby_Env}$session.new <- function(f){
+        i <- length(#{RinRuby_Socket}) + 1
+        #{RinRuby_Socket}[[i]] <- socketConnection(
+            "#{@hostname}", #{@port_number}, blocking=TRUE, open="rb", timeout=NULL)
+        invisible(f(#{RinRuby_Socket}[[i]]))
+      }
+      #{RinRuby_Env}$session.reuse <- function(i){
+        function(f){
           invisible(f(#{RinRuby_Socket}[[i]]))
         }
-        #{RinRuby_Env}$session.reuse <- function(i){
-          function(f){
-            invisible(f(#{RinRuby_Socket}[[i]]))
-          }
-        }
-        #{RinRuby_Env}$session <- #{RinRuby_Env}$session.new
-      EOF
-    else
-      @writer.puts <<-EOF
-        #{RinRuby_Env}$session <- function(f){
-          con <- socketConnection(
-              "#{@hostname}", #{@port_number}, blocking=TRUE, open="rb", timeout=NULL)
-          res <- f(con)
-          close(con)
-          invisible(res)
-        }
-      EOF
-    end
-    @writer.puts <<-EOF
+      }
+      #{RinRuby_Env}$session <- function(f){
+        con <- socketConnection(
+            "#{@hostname}", #{@port_number}, blocking=TRUE, open="rb", timeout=NULL)
+        res <- f(con)
+        close(con)
+        invisible(res)
+      }
       #{RinRuby_Env}$write <- function(con, v, ...){
         invisible(lapply(list(v, ...), function(v2){
             writeBin(v2, con, endian="big")}))
@@ -663,15 +655,16 @@ def initialize(*args)
           @socket[i][1] = false
           socket = @socket[i][0]
           socket_pool_index = i  
-          @writer.puts "#{RinRuby_Env}$session <- #{RinRuby_Env}$session.reuse(#{i + 1})"
+          @writer.puts "#{RinRuby_Env}$session <<- #{RinRuby_Env}$session.reuse(#{i + 1})"
           break
         end
         i = i + 1
       end
       unless socket_pool_index then # require new connection
         socket_pool_index = i
-        @writer.puts "#{RinRuby_Env}$session <- #{RinRuby_Env}$session.new"
+        @writer.puts "#{RinRuby_Env}$session <<- #{RinRuby_Env}$session.new"
         @socket[socket_pool_index] = [nil, false]
+        p @socket
       end
     end
     
@@ -682,6 +675,7 @@ def initialize(*args)
     
     if socket_pool_index then
       @socket[socket_pool_index] = [socket, true] # reuse
+      p @socket
     else
       socket.close
     end
