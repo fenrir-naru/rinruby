@@ -519,25 +519,18 @@ def initialize(*args)
     if @opts[:persistent] then
       @writer.puts <<-EOF
         #{RinRuby_Socket} <- list()
-        #{RinRuby_Env}$session <- function(f){
-          i <- 1
-          len <- length(#{RinRuby_Socket})
-          while(i <= len){
-            if(#{RinRuby_Socket}[[i]]$free){
-              #{RinRuby_Socket}[[i]]$free <<- F
-              break
-            }
-            i <- i + 1
-          }
-          if(i > len){ # No available connection
-            #{RinRuby_Socket}[[i]] <- list(
-                socket=socketConnection(
-                  "#{@hostname}", #{@port_number}, blocking=TRUE, open="rb", timeout=NULL),
-                free=F)
-          }
-          res <- f(#{RinRuby_Socket}[[i]]$socket)
-          invisible(res)
+        #{RinRuby_Env}$session.new <- function(f){
+          i <- length(#{RinRuby_Socket}) + 1
+          #{RinRuby_Socket}[[i]] <- socketConnection(
+              "#{@hostname}", #{@port_number}, blocking=TRUE, open="rb", timeout=NULL)
+          invisible(f(#{RinRuby_Socket}[[i]]))
         }
+        #{RinRuby_Env}$session.reuse <- function(i){
+          function(f){
+            invisible(f(#{RinRuby_Socket}[[i]]))
+          }
+        }
+        #{RinRuby_Env}$session <- #{RinRuby_Env}$session.new
       EOF
     else
       @writer.puts <<-EOF
@@ -649,38 +642,50 @@ def initialize(*args)
   
   def socket_session(expr_R, &b)
     socket = nil
-    t = nil
-    while (socket = @socket.pop) # check whether socket is still alive
-      break unless socket.closed?
-      @writer.puts <<-EOF # take care; @socket and RinRuby_Socket are opposite ordered 
-        for(i in 1:length(#{RinRuby_Socket})){
-          if(!#{RinRuby_Socket}[[i]]$free){next}
-          tryCatch(
-              close(#{RinRuby_Socket}[[i]]$socket),
-              warning=function(w){}, error=function(e){})
-          #{RinRuby_Socket}[[i]] <- NULL
+    
+    socket_pool_index = nil # for persistent mode
+    if @opts[:persistent] then
+      i_limit = @socket.size
+      i = 0
+      while i < i_limit
+        if @socket[i][1] then # check availability, @socket = [[socket, available?], ...]
+          if @socket[i][0].closed? then # check already (unintentionally) closed?
+            @writer.puts <<-EOF # remove socket from connection list
+              tryCatch(
+                  close(#{RinRuby_Socket}[[#{i + 1}]]),
+                  warning=function(w){}, error=function(e){})
+              #{RinRuby_Socket}[[#{i + 1}]] <- NULL
+            EOF
+            i_limit = i_limit - 1 # reduce size
+            next
+          end
+          # available connection found
+          @socket[i][1] = false
+          socket = @socket[i][0]
+          socket_pool_index = i  
+          @writer.puts "#{RinRuby_Env}$session <- #{RinRuby_Env}$session.reuse(#{i + 1})"
           break
-        }
-      EOF
+        end
+        i = i + 1
+      end
+      unless socket_pool_index then # require new connection
+        socket_pool_index = i
+        @writer.puts "#{RinRuby_Env}$session <- #{RinRuby_Env}$session.new"
+        @socket[socket_pool_index] = [nil, false]
+      end
     end
-    unless socket
-      t = Thread::new{socket = @server_socket.accept}
-    end
+    
+    t = socket ? nil : Thread::new{socket = @server_socket.accept}
     @writer.puts expr_R
     t.join if t
     res = b.call(socket)
-    if @opts[:persistent] then
-      @writer.puts <<-EOF # change state for reuse
-        for(i in length(#{RinRuby_Socket}):1){
-          if(#{RinRuby_Socket}[[i]]$free){next}
-          #{RinRuby_Socket}[[i]]$free <<- T
-          break
-        }
-      EOF
-      @socket.push(socket)
+    
+    if socket_pool_index then
+      @socket[socket_pool_index] = [socket, true] # reuse
     else
       socket.close
     end
+    
     res
   end
 
