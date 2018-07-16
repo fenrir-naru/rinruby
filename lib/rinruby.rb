@@ -628,7 +628,7 @@ def initialize(*args)
       t = Thread::new{socket = @server_socket.accept}
       @writer.puts <<-EOF
         #{RinRuby_Socket} <- socketConnection(
-            "#{@hostname}", #{@port_number}, blocking=TRUE, open="rb")
+            "#{@hostname}", #{@port_number}, blocking=TRUE, open="rb") # TODO , timeout=NULL)
         #{"on.exit(close(#{RinRuby_Socket}, add = T))" if @opts[:persistent]}
       EOF
       t.join
