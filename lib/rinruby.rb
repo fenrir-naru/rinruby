@@ -58,6 +58,7 @@
 #
 #The files "java" and "readline" are used when available to add functionality.
 require 'matrix'
+require 'complex'
 class RinRuby
 
   require 'socket'
@@ -496,6 +497,7 @@ def initialize(*args)
     :Logical,
     :Integer,
     :Double,
+    :Complex,
     :Character,
     :Matrix,
   ].each_with_index{|type, i|
@@ -606,6 +608,9 @@ def initialize(*args)
         write(#{RinRuby_Type_Integer}L, length(var), var)
       } else if ( is.double(var) ) {
         write(#{RinRuby_Type_Double}L, length(var), var)
+        na.indices()
+      } else if ( is.complex(var) ) {
+        write(#{RinRuby_Type_Complex}L, length(var), var)
         na.indices()
       } else if ( is.character(var) ) {
         write(#{RinRuby_Type_Character}L, length(var))
@@ -764,6 +769,22 @@ def initialize(*args)
     end
   end
   
+  class R_Complex < R_DataType
+    ID = RinRuby_Type_Complex
+    class <<self
+      def receive(io)
+        length = io.read(4).unpack('l').first
+        # writeBin(compex, ...) on R results in 
+        # real(1), imag(1), real(2), imag(2), ... with double precision
+        res = io.read(8 * 2 * length).unpack("D*") \
+            .each_slice(2).collect{|vr, vi| Complex(vr, vi)}
+        na_indices = io.read(4).unpack('l').first
+        io.read(4 * na_indices).unpack("l*").each{|i| res[i] = nil}
+        res
+      end
+    end
+  end
+  
   class R_Character < R_DataType
     ID = RinRuby_Type_Character
     class <<self
@@ -849,6 +870,7 @@ def initialize(*args)
         R_Logical,
         R_Integer,
         R_Double,
+        R_Complex,
         R_Character,
       ].find{|k|
         k::ID == type
