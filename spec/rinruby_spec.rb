@@ -117,6 +117,25 @@ shared_examples 'RinRubyCore' do
           expect(subject.pull('x')).to eql(v)
         }
       end
+      it "should pull a Complex" do
+        {
+          '1+1i' => Complex(1.0, 1.0),
+          'as.complex(1)' => Complex(1.0, 0.0), 
+          'as.complex(NA)' => nil,
+        }.each{|k, v|
+          subject.eval("x<-#{k}")
+          expect(subject.pull('x')).to eql(v)
+        }
+        subject.eval("x<-as.complex(NaN)")
+        expect(subject.pull('x').kind_of?(Complex)).to be_truthy
+        expect(subject.pull('x').real.nan?).to be_truthy
+        expect(subject.pull('x').imag).to eql(0.0)
+        subject.eval("x<-complex(real=NaN, imag=NaN)")
+        expect(subject.pull('x').kind_of?(Complex)).to be_truthy
+        expect(subject.pull('x').real.nan?).to be_truthy
+        expect(subject.pull('x').imag.nan?).to be_truthy
+      end
+      
       it "should pull an Array of Character" do
         {
           "c('a','b','',NA)" => ['a','b','',nil],
@@ -156,6 +175,19 @@ shared_examples 'RinRubyCore' do
           expect(subject.pull('x')).to eql(v)
         }
       end
+      it "should pull an Array of Complex" do
+        subject.eval("x<-c(1+1i, 1, NA, NaN, complex(real=NaN, imag=NaN))")
+        expect(subject.pull('x')[0..-3]).to eql([Complex(1.0, 1.0), Complex(1.0, 0.0), nil])
+        expect(subject.pull('x')[-2].kind_of?(Complex)).to be_truthy
+        expect(subject.pull('x')[-2].real.nan?).to be_truthy
+        expect(subject.pull('x')[-2].imag).to eql(0.0)
+        expect(subject.pull('x')[-1].kind_of?(Complex)).to be_truthy
+        expect(subject.pull('x')[-1].real.nan?).to be_truthy
+        expect(subject.pull('x')[-1].imag.nan?).to be_truthy
+        
+        subject.eval("x<-as.complex(NULL)")
+        expect(subject.pull('x')).to eql([])
+      end
 
       it "should pull a Matrix" do
         threshold = 1e-8
@@ -171,6 +203,16 @@ shared_examples 'RinRubyCore' do
             },
             gen_matrix_cmp_per_elm_proc{|a, b|
               expect(a).to be_within(threshold).of(b)
+            }
+          ],
+          [ # complex matrix
+            proc{
+              vr, vi = [rand(100000000), rand(100000000)] # get 8 digits
+              [Complex("0.#{vr}", "0.#{vi}"), "0.#{vr}+0.#{vi}i"]
+            },
+            gen_matrix_cmp_per_elm_proc{|a, b|
+              expect(a.real).to be_within(threshold).of(b.real)
+              expect(a.imag).to be_within(threshold).of(b.imag)
             }
           ],
         ].each{|gen_proc, cmp_proc|
@@ -222,6 +264,21 @@ shared_examples 'RinRubyCore' do
           expect(subject.pull('x')).to eql(x)
         }
       end
+      it "should assign a Complex" do
+        [Complex(rand, rand), Complex(rand, 0), Complex(rand, 0.0), Complex(rand)].each{|x|
+          subject.assign("x", x)
+          expect(subject.pull('x').real).to eql(x.real)
+          expect(subject.pull('x').imag).to eql(x.imag.to_f)
+        }
+        subject.assign("x", Complex(Float::NAN))
+        expect(subject.pull('x').kind_of?(Complex)).to be_truthy
+        expect(subject.pull('x').real.nan?).to be_truthy
+        expect(subject.pull('x').imag).to eql(0.0)
+        subject.assign("x", Complex(Float::NAN, Float::NAN))
+        expect(subject.pull('x').kind_of?(Complex)).to be_truthy
+        expect(subject.pull('x').real.nan?).to be_truthy
+        expect(subject.pull('x').imag.nan?).to be_truthy
+      end
       it "should assign an Array of Character" do
         x = ['a', 'b', nil]
         subject.assign("x", x)
@@ -245,6 +302,26 @@ shared_examples 'RinRubyCore' do
         subject.assign("x", x)
         expect(subject.pull('x')).to eql(x)
       end
+      it "should assign an Array of Complex" do
+        x = [rand(100000000), rand(0x1000) << 32, rand, Rational(rand(1000), rand(1000) + 1),
+            Complex(rand, rand), Complex(rand), nil, 
+            Float::NAN, Complex(Float::NAN), Complex(Float::NAN, Float::NAN)]
+        subject.assign("x", x)
+        expect(subject.pull('x')[0..-5].collect{|c| c.real}).to eql(
+            x[0..-5].collect{|v| v.kind_of?(Complex) ? v.real : v.to_f})
+        expect(subject.pull('x')[0..-5].collect{|c| c.imag}).to eql(
+            x[0..-5].collect{|v| (v.kind_of?(Complex) ? v : 0).imag.to_f})
+        expect(subject.pull('x')[-4]).to eql(nil)
+        expect(subject.pull('x')[-3].kind_of?(Complex)).to be_truthy
+        expect(subject.pull('x')[-3].real.nan?).to be_truthy
+        expect(subject.pull('x')[-3].imag).to eql(0.0)
+        expect(subject.pull('x')[-2].kind_of?(Complex)).to be_truthy
+        expect(subject.pull('x')[-2].real.nan?).to be_truthy
+        expect(subject.pull('x')[-2].imag).to eql(0.0)
+        expect(subject.pull('x')[-1].kind_of?(Complex)).to be_truthy
+        expect(subject.pull('x')[-1].real.nan?).to be_truthy
+        expect(subject.pull('x')[-1].imag.nan?).to be_truthy
+      end
 
       it "should assign a Matrix" do
         threshold = Float::EPSILON * 100
@@ -262,6 +339,24 @@ shared_examples 'RinRubyCore' do
             gen_matrix_cmp_per_elm_proc{|a, b|
               if b.kind_of?(Numeric) then
                 expect(a).to be_within(threshold).of(b)
+              else
+                expect(a).to eql(nil)
+              end
+            },
+          ],
+          [ # complex matrix
+            proc{Complex(rand, rand)},
+            gen_matrix_cmp_per_elm_proc{|a, b|
+              expect(a.real).to be_within(threshold).of(b.real)
+              expect(a.imag).to be_within(threshold).of(b.imag)
+            },
+          ],
+          [ # complex matrix with NA
+            proc{v = rand; v > 0.5 ? nil : Complex(v, rand)},
+            gen_matrix_cmp_per_elm_proc{|a, b|
+              if b.kind_of?(Numeric) then
+                expect(a.real).to be_within(threshold).of(b.real)
+                expect(a.imag).to be_within(threshold).of(b.imag)
               else
                 expect(a).to eql(nil)
               end
