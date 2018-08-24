@@ -576,6 +576,9 @@ def initialize(*args)
         } else if ( type == #{RinRuby_Type_Double} ) {
           value <- read(double, length)
           value[na.indices()] <- NA
+        } else if ( type == #{RinRuby_Type_Complex} ) {
+          value <- read(complex, length)
+          value[na.indices()] <- NA
         } else if ( type == #{RinRuby_Type_Character} ) {
           value <- character(length)
           for(i in seq_len(length)){
@@ -741,7 +744,7 @@ def initialize(*args)
     class <<self
       def convertable?(value)
         value.all?{|x|
-          (x == nil) || x.kind_of?(Numeric)
+          (x == nil) || (x.kind_of?(Numeric) && !x.kind_of?(Complex))
         }
       end
       def send(value, io)
@@ -772,6 +775,28 @@ def initialize(*args)
   class R_Complex < R_DataType
     ID = RinRuby_Type_Complex
     class <<self
+      def convertable?(value)
+        value.all?{|x|
+          (x == nil) || x.kind_of?(Numeric)
+        }
+      end
+      def send(value, io)
+        # Complex format: data_size, data, ..., na_index_size, na_index, ...
+        io.write([value.size].pack('l'))
+        nils = []
+        value.each.with_index{|x, i|
+          if x == nil then
+            nils << i
+            io.write([Float::NAN, 0].pack('D*'))
+          elsif x.kind_of?(Complex) then
+            io.write([x.real, x.imag].pack('D*'))
+          else
+            io.write([x.to_f, 0].pack('D*'))
+          end
+        }
+        io.write(([nils.size] + nils).pack('l*'))
+        value
+      end
       def receive(io)
         length = io.read(4).unpack('l').first
         # writeBin(compex, ...) on R results in 
@@ -835,6 +860,7 @@ def initialize(*args)
       R_Logical,
       R_Integer,
       R_Double,
+      R_Complex,
       R_Character,
     ].find{|k|
       k === value
