@@ -1,10 +1,24 @@
 # rinruby
-* http://rinruby.ddahl.org/
+
+[![Build Status](https://travis-ci.org/fenrir-naru/rinruby.svg?branch=dev-fenrir)](https://travis-ci.org/fenrir-naru/rinruby)
+
+[![Build status](https://ci.appveyor.com/api/projects/status/m2u2k07dr16804lm/branch/dev-fenrir?svg=true)](https://ci.appveyor.com/project/fenrir-naru/rinruby/branch/dev-fenrir)
+
+This is a forked version of [RinRuby](https://github.com/clbustos/rinruby). The advantage of this forked version is mainly addition of functionality.
+
+## Specific information of this version
+
+### INSTALL
+
+* sudo gem install specific_install # Only required first time
+* sudo gem specific_install https://github.com/fenrir-naru/rinruby.git dev-fenrir
+
+### LICENSE (same as the original version)
+
+GPL-3. See LICENSE.txt for more information.
 
 
-[![Build Status](https://travis-ci.org/clbustos/rinruby.svg?branch=master)](https://travis-ci.org/clbustos/rinruby)
-
-[![Maintainability](https://api.codeclimate.com/v1/badges/d6cdb002c01f4a696ff3/maintainability)](https://codeclimate.com/github/clbustos/rinruby/maintainability)
+## Original information (copied)
 
 ### DESCRIPTION
 
@@ -63,13 +77,3 @@ Below is a simple example of RinRuby usage for simple linear regression. The sim
 ### REQUIREMENTS
 
 * R
-
-### INSTALL
-
-* sudo gem install rinruby
-
-
-### LICENSE
-
-GPL-3. See LICENSE.txt for more information.
-
