@@ -58,6 +58,7 @@
 #
 #The files "java" and "readline" are used when available to add functionality.
 require 'matrix'
+require 'complex'
 
 require File.expand_path(File.dirname(__FILE__) + '/rinruby/version.rb')
 
@@ -453,6 +454,7 @@ class RinRuby
     :Logical,
     :Integer,
     :Double,
+    :Complex,
     :Character,
     :Matrix,
   ].each_with_index{|type, i|
@@ -559,6 +561,9 @@ class RinRuby
         } else if ( type == #{RinRuby_Type_Double} ) {
           value <- read(double, length)
           value[na.indices()] <- NA
+        } else if ( type == #{RinRuby_Type_Complex} ) {
+          value <- read(complex, length)
+          value[na.indices()] <- NA
         } else if ( type == #{RinRuby_Type_Character} ) {
           value <- character(length)
           for(i in seq_len(length)){
@@ -591,6 +596,9 @@ class RinRuby
         write(#{RinRuby_Type_Integer}L, length(var), var)
       } else if ( is.double(var) ) {
         write(#{RinRuby_Type_Double}L, length(var), var)
+        na.indices()
+      } else if ( is.complex(var) ) {
+        write(#{RinRuby_Type_Complex}L, length(var), var)
         na.indices()
       } else if ( is.character(var) ) {
         write(#{RinRuby_Type_Character}L, length(var))
@@ -724,7 +732,7 @@ class RinRuby
     class <<self
       def convertable?(value)
         value.all?{|x|
-          (x == nil) || x.kind_of?(Numeric)
+          (x == nil) || (x.kind_of?(Numeric) && !x.kind_of?(Complex))
         }
       end
       def send(value, io)
@@ -745,6 +753,44 @@ class RinRuby
       def receive(io)
         length = io.read(4).unpack('l').first
         res = io.read(8 * length).unpack("D*")
+        na_indices = io.read(4).unpack('l').first
+        io.read(4 * na_indices).unpack("l*").each{|i| res[i] = nil}
+        res
+      end
+    end
+  end
+  
+  class R_Complex < R_DataType
+    ID = RinRuby_Type_Complex
+    class <<self
+      def convertable?(value)
+        value.all?{|x|
+          (x == nil) || x.kind_of?(Numeric)
+        }
+      end
+      def send(value, io)
+        # Complex format: data_size, data, ..., na_index_size, na_index, ...
+        io.write([value.size].pack('l'))
+        nils = []
+        value.each.with_index{|x, i|
+          if x == nil then
+            nils << i
+            io.write([Float::NAN, 0].pack('D*'))
+          elsif x.kind_of?(Complex) then
+            io.write([x.real, x.imag].pack('D*'))
+          else
+            io.write([x.to_f, 0].pack('D*'))
+          end
+        }
+        io.write(([nils.size] + nils).pack('l*'))
+        value
+      end
+      def receive(io)
+        length = io.read(4).unpack('l').first
+        # writeBin(compex, ...) on R results in 
+        # real(1), imag(1), real(2), imag(2), ... with double precision
+        res = io.read(8 * 2 * length).unpack("D*") \
+            .each_slice(2).collect{|vr, vi| Complex(vr, vi)}
         na_indices = io.read(4).unpack('l').first
         io.read(4 * na_indices).unpack("l*").each{|i| res[i] = nil}
         res
@@ -803,6 +849,7 @@ class RinRuby
       R_Logical,
       R_Integer,
       R_Double,
+      R_Complex,
       R_Character,
     ].find{|k|
       k === value
@@ -842,6 +889,7 @@ class RinRuby
         R_Logical,
         R_Integer,
         R_Double,
+        R_Complex,
         R_Character,
       ].find{|k|
         k::ID == type
