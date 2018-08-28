@@ -176,6 +176,21 @@ class RinRuby
     # To continue when R error occurs, an error handler is added as a workaround  
     # @see https://stat.ethz.ch/R-manual/R-devel/library/base/html/stop.html
     eval("options(error=dump.frames)") if @platform =~ /^(?!windows-).*java$/
+    
+    # Encoding setup (Ruby >= 1.9.0)
+    @r_encoding = Encoding::find(
+        case pull("options()$encoding")
+          when /utf-?8/i then "UTF-8"
+          when 'native.enc'
+            case pull("Sys.getlocale('LC_CTYPE')")
+            when /\.UTF-8/i then "UTF-8"
+            when /\.(\d+)$/ then "CP#{$1}"
+            end
+        end) rescue nil
+    if @r_encoding then
+      @writer.set_encoding(@r_encoding)
+      @reader.set_encoding(@r_encoding)
+    end
   end
 
 #The quit method will properly close the bridge between Ruby and R, freeing up system resources. This method does not need to be run when a Ruby script ends.
