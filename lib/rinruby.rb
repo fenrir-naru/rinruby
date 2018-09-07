@@ -169,6 +169,15 @@ class RinRuby
     [:socket_io, :assign, :pull, :check].each{|fname| self.send("r_rinruby_#{fname}")}
     @writer.flush
     
+    @r_data_types = [
+      R_Logical,
+      R_Integer,
+      R_Double,
+      R_Complex,
+      R_Character,
+    ]
+    @r_character = R_Character
+    
     @eval_count = 0
     eval("0", false) # cleanup @reader
     
@@ -190,6 +199,23 @@ class RinRuby
     if @r_encoding then
       @writer.set_encoding(@r_encoding)
       @reader.set_encoding(@r_encoding)
+      @r_data_types.collect!{|type|
+        next type unless type == R_Character
+        encoding = @r_encoding
+        @r_character = Class::new(R_Character){|cls|
+          define_singleton_method(:encoding){encoding}
+          def cls.send(value, io)
+            R_Character::send(value, io){|str|
+              str.encode(encoding).force_encoding(Encoding::ASCII_8BIT)
+            }
+          end
+          def cls.receive(io)
+            R_Character::receive(io){|str|
+              str.force_encoding(encoding).encode(Encoding::default_external)
+            }
+          end
+        }
+      }
     end
   end
 
@@ -821,25 +847,28 @@ class RinRuby
           (x == nil) || x.kind_of?(String)
         }
       end
-      def send(value, io)
+      def send(value, io, &conv_proc)
+        conv_proc ||= proc{|str| str.bytes.pack('C*')} # .bytes.pack("C*").encoding equals to "ASCII-8BIT"
         # Character format: data_size, data1_bytes, data1, data2_bytes, data2, ...
         io.write([value.size].pack('l'))
         value.each{|x|
           if x then
-            bytes = x.to_s.bytes # TODO: taking care of encoding difference
-            io.write(([bytes.size] + bytes).pack('lC*')) # .bytes.pack("C*").encoding equals to "ASCII-8BIT"
+            bytes = conv_proc.call(x.to_s)
+            io.write([bytes.size].pack('l'))
+            io.write(bytes) 
           else
             io.write([RinRuby_NA_R_Integer].pack('l'))
           end
         }
         value
       end
-      def receive(io)
+      def receive(io, &conv_proc)
+        conv_proc ||= proc{|str| str}
         length = io.read(4).unpack('l').first
         Array.new(length){|i|
           nchar = io.read(4).unpack('l')[0]
           # negative nchar means NA, and "+ 1" for zero-terminated string
-          (nchar >= 0) ? io.read(nchar + 1)[0..-2] : nil
+          (nchar >= 0) ? conv_proc.call(io.read(nchar + 1)[0..-2]) : nil
         }
       end
     end
@@ -860,13 +889,7 @@ class RinRuby
       value = [value]
     end
     
-    r_type ||= [
-      R_Logical,
-      R_Integer,
-      R_Double,
-      R_Complex,
-      R_Character,
-    ].find{|k|
+    r_type ||= @r_data_types.find{|k|
       k === value
     }
     raise "Unsupported data type on Ruby's end" unless r_type
@@ -900,13 +923,7 @@ class RinRuby
             false)
       end
       
-      r_type = [
-        R_Logical,
-        R_Integer,
-        R_Double,
-        R_Complex,
-        R_Character,
-      ].find{|k|
+      r_type = @r_data_types.find{|k|
         k::ID == type
       }
       
@@ -921,7 +938,7 @@ class RinRuby
   end
 
   def if_passed(string, r_func, opt = {}, &then_proc)
-    assign_engine("#{RinRuby_Env}$assign.test.string", string, R_Character)
+    assign_engine("#{RinRuby_Env}$assign.test.string", string, @r_character)
     res = socket_session{|socket|
       @writer.puts "#{RinRuby_Test_Result} <- #{r_func}(#{RinRuby_Test_String})"
       @writer.flush
