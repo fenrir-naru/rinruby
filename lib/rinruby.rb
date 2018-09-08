@@ -197,8 +197,8 @@ class RinRuby
             end
         end) rescue nil
     if @r_encoding then
-      @writer.set_encoding(@r_encoding)
-      @reader.set_encoding(@r_encoding)
+      @writer.set_encoding(@r_encoding, Encoding.default_external)
+      @reader.set_encoding(@r_encoding, Encoding.default_external)
       @r_data_types.collect!{|type|
         next type unless type == R_Character
         encoding = @r_encoding
