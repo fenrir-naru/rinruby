@@ -647,7 +647,8 @@ class RinRuby
           if( is.na(i) ){
             write(as.integer(NA))
           }else{
-            write(nchar(i, type="bytes"), i)
+            i_native <- enc2native(i)
+            write(nchar(i_native, type="bytes"), i_native)
           }
         }
       } else {
