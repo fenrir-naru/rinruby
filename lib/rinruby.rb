@@ -186,37 +186,30 @@ class RinRuby
     # @see https://stat.ethz.ch/R-manual/R-devel/library/base/html/stop.html
     eval("options(error=dump.frames)") if @platform =~ /^(?!windows-).*java$/
     
-    # Encoding setup (Ruby >= 1.9.0)
-    @r_encoding = Encoding::find(
-        case pull("options()$encoding")
-          when /utf-?8/i then "UTF-8"
-          when 'native.enc'
-            case pull("Sys.getlocale('LC_CTYPE')")
-            when /\.UTF-8/i then "UTF-8"
-            when /\.(\d+)$/ then "CP#{$1}"
-            end
-        end) rescue nil
-    if @r_encoding then
-      @writer.set_encoding(@r_encoding, Encoding.default_external)
-      @reader.set_encoding(@r_encoding, Encoding.default_external)
+    @r_info = get_r_info
+    if @r_info[:encoding] then
+      @writer.set_encoding(@r_info[:encoding], Encoding.default_external)
+      @reader.set_encoding(@r_info[:encoding], Encoding.default_external)
       @r_data_types.collect!{|type|
-        next type unless type == R_Character
-        encoding = @r_encoding
-        @r_character = Class::new(R_Character){|cls|
-          define_singleton_method(:encoding){encoding}
-          def cls.send(value, io)
-            R_Character::send(value, io){|str|
-              str.encode(encoding).force_encoding(Encoding::ASCII_8BIT)
-            }
-          end
-          def cls.receive(io)
-            R_Character::receive(io){|str|
-              str.force_encoding(encoding).encode(Encoding::default_external)
-            }
-          end
-        }
+        next type unless type == @r_character
+        @r_character = type.set_encoding(@r_info[:encoding])
       }
     end
+  end
+  
+  def get_r_info
+    {
+      # Encoding setup (Ruby >= 1.9.0)
+      :encoding => (Encoding::find(
+          case pull("options()$encoding")
+            when /utf-?8/i then "UTF-8"
+            when 'native.enc'
+              case pull("Sys.getlocale('LC_CTYPE')")
+              when /\.UTF-8/i then "UTF-8"
+              when /\.(\d+)$/ then "CP#{$1}"
+              end
+          end) rescue nil),
+    }
   end
 
 #The quit method will properly close the bridge between Ruby and R, freeing up system resources. This method does not need to be run when a Ruby script ends.
@@ -872,6 +865,23 @@ class RinRuby
           (nchar >= 0) ? conv_proc.call(io.read(nchar + 1)[0..-2]) : nil
         }
       end
+    end
+    
+    def self.set_encoding(encoding)
+      (@cache_set_encoding ||= {})[encoding] ||= Class::new(self){|cls|
+        singleton_class.send(:define_method, :encoding){encoding} # equivalent to define_singleton_method
+        singleton_class.send(:undef_method, :set_encoding)
+        def cls.send(value, io)
+          super(value, io){|str|
+            str.encode(encoding).force_encoding(Encoding::ASCII_8BIT)
+          }
+        end
+        def cls.receive(io)
+          super(io){|str|
+            str.force_encoding(encoding).encode(Encoding::default_external)
+          }
+        end
+      }
     end
   end
   
