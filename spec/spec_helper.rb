@@ -31,6 +31,8 @@ class String
   def deindent
     gsub /^[ \t]*/, '' 
   end
+  
+  UTF8_3B_CHARACTERS = eval("\"#{
+    (1..(0xFFFF)).collect{|i| "\\u{%x}"%[i] unless ((i >= 0xD800) && (i < 0xE000))}.join
+  }\"")
 end
-
-
