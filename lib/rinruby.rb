@@ -188,11 +188,12 @@ class RinRuby
     
     @r_info = get_r_info
     if @r_info[:encoding] then
+      @writer.puts("#{RinRuby_Env}$char.transcoder(T)")
       @writer.set_encoding(@r_info[:encoding], Encoding.default_external)
       @reader.set_encoding(@r_info[:encoding], Encoding.default_external)
       @r_data_types.collect!{|type|
         next type unless type == @r_character
-        @r_character = type.set_encoding(@r_info[:encoding])
+        @r_character = type.set_locale(@r_info[:encoding])
       }
     end
   end
@@ -498,6 +499,7 @@ class RinRuby
   RinRuby_Socket = "#{RinRuby_Env}$socket"
   RinRuby_Test_String = "#{RinRuby_Env}$test.string"
   RinRuby_Test_Result = "#{RinRuby_Env}$test.result"
+  RinRuby_Encodings = ["unknown", "UTF-8", ["latin1", "CP1252"]]
   
   RinRuby_Eval_Flag = "RINRUBY.EVAL.FLAG"
   
@@ -529,6 +531,28 @@ class RinRuby
           })
         })
       }
+      #{RinRuby_Env}$char.transcoder <- function(m17n = F){
+        if(m17n){
+          encodings <- list(#{RinRuby_Encodings.collect.with_index{|v, i| 
+            "\"#{v.kind_of?(Array) ? v[0] : v}\" = \"\\x#{i+1}\""
+          }.join(',')})
+          assign("char.decode", function(char){
+                Encoding(char) <- names(encodings[encodings %in% substring(char, 1, 1)])[[1]]
+                invisible(substring(char, 2))
+              }, envir=#{RinRuby_Env})
+          assign("char.encode", function(char){
+                head <- encodings[[Encoding(char)]]
+                Encoding(char) <- "bytes"
+                invisible(paste0(head, char))
+              }, envir=#{RinRuby_Env})
+        }else{
+          pass_through <- function(char){char}
+          assign("char.decode", pass_through, envir=#{RinRuby_Env})
+          assign("char.encode", pass_through, envir=#{RinRuby_Env})
+        }
+        invisible(T)
+      }
+      #{RinRuby_Env}$char.transcoder(F)
     EOF
   end
   
@@ -602,7 +626,7 @@ class RinRuby
           value <- character(length)
           for(i in seq_len(length)){
             nbytes <- read(integer, 1)
-            value[[i]] <- ifelse(nbytes >= 0, readchar(nbytes), NA)
+            value[[i]] <- ifelse(nbytes >= 0, #{RinRuby_Env}$char.decode(readchar(nbytes)), NA)
           }
         }
         value
@@ -640,8 +664,8 @@ class RinRuby
           if( is.na(i) ){
             write(as.integer(NA))
           }else{
-            i_native <- enc2native(i)
-            write(nchar(i_native, type="bytes"), i_native)
+            i <- #{RinRuby_Env}$char.encode(i)
+            write(nchar(i, type="bytes"), i)
           }
         }
       } else {
@@ -867,18 +891,34 @@ class RinRuby
       end
     end
     
-    def self.set_encoding(encoding)
-      (@cache_set_encoding ||= {})[encoding] ||= Class::new(self){|cls|
-        singleton_class.send(:define_method, :encoding){encoding} # equivalent to define_singleton_method
-        singleton_class.send(:undef_method, :set_encoding)
+    def self.set_locale(r_enc)
+      (@cache_set_locale ||= {})[r_enc] ||= Class::new(self){|cls|
+        encodings = RinRuby_Encodings.collect{|v|
+          next r_enc if v == "unknown"
+          Encoding::find(v.kind_of?(Array) ? v[1] : v)
+        }
+        singleton_class.send(:define_method, :encodings){encodings} # equivalent to define_singleton_method
+        singleton_class.send(:undef_method, :set_locale)
         def cls.send(value, io)
+          # Encoding conversion policy from Ruby to R
+          # If target is in either R LC_CTYPE, UTF-8, or latin1(CP1252), then no conversion occurs.
+          # Otherwise, conversions to R LC_CTYPE, UTF-8, and latin1(CP1252) are made in order until success.
           super(value, io){|str|
-            str.encode(encoding).force_encoding(Encoding::ASCII_8BIT)
+            str_encoded = str
+            idx = encodings.index(str.encoding)
+            idx ||= encodings.index{|enc|
+              str_encoded = str.encode(enc) rescue nil
+            }
+            ([idx + 1].pack("C") + str_encoded).force_encoding(Encoding::ASCII_8BIT)
           }
         end
         def cls.receive(io)
+          # Encoding conversion policy from R to Ruby
+          # Conversion to Ruby default external encoding is actively attempted
+          # If failure, no conversion is made
           super(io){|str|
-            str.force_encoding(encoding).encode(Encoding::default_external)
+            res = str[1..-1].force_encoding(encodings[str.unpack("C")[0] - 1])
+            res.encode(Encoding::default_external) rescue res
           }
         end
       }
