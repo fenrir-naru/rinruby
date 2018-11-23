@@ -421,6 +421,38 @@ shared_examples 'RinRubyCore' do
     end
   end
   
+  describe "m17n support" do
+    it "check R prerequisite" do
+      l10n_info = Hash[*([:names, :unlist].collect{|k| 
+        r.pull("#{k}(l10n_info())")
+      }.transpose.flatten)] 
+      expect(l10n_info.keys).to include("UTF-8", "Latin-1")
+    end
+    context "UTF-8 support" do
+      it "should pull" do
+        r.assign("x", String::UTF8_3B_CHARACTERS.unpack("U*"))
+        r.eval("x <- intToUtf8(x)")
+        expect(r.pull("x").encode("UTF-8")).to eql(String::UTF8_3B_CHARACTERS)
+      end
+      it "should assign" do
+        r.assign("x", String::UTF8_3B_CHARACTERS)
+        expect(r.pull("utf8ToInt(x)")).to eql(String::UTF8_3B_CHARACTERS.unpack("U*"))
+        expect(r.pull("Encoding(x)")).to eql(r.pull("l10n_info()$\"UTF-8\"") ? "unknown" : "UTF-8")
+      end
+    end
+    context "Latin-1 support" do
+      it "should pull" do
+        r.eval("x <- rawToChar(as.raw(1:255)); Encoding(x) <- 'latin1'")
+        expect(r.pull("x").encode("CP1252").unpack("C*")).to eql((1..255).to_a)
+      end
+      it "should assign" do
+        r.assign("x", (1..255).to_a.pack("C*").force_encoding("CP1252"))
+        expect(r.pull("as.integer(charToRaw(x))")).to eql((1..255).to_a)
+        expect(r.pull("Encoding(x)")).to eql(r.pull("l10n_info()$'Latin-1'") ? "unknown" :"latin1")
+      end
+    end
+  end
+  
   describe "echo changes eval output" do
     def check_output(echo_args, stdout, stderr)
       r.echo(*echo_args)
