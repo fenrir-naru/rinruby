@@ -32,7 +32,5 @@ class String
     gsub /^[ \t]*/, '' 
   end
   
-  UTF8_3B_CHARACTERS = eval("\"#{
-    (1..(0xFFFF)).collect{|i| "\\u{%x}"%[i] unless ((i >= 0xD800) && (i < 0xE000))}.join
-  }\"")
+  UTF8_3B_CHARACTERS = (1..(0xFFFF)).reject{|i| (i >= 0xD800) && (i < 0xE000)}.pack("U*")
 end
