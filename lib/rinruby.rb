@@ -189,8 +189,8 @@ class RinRuby
     @r_info = get_r_info
     if @r_info[:encoding] then
       @writer.puts("#{RinRuby_Env}$char.transcoder(T)")
-      @writer.set_encoding(@r_info[:encoding], Encoding.default_external)
-      @reader.set_encoding(@r_info[:encoding], Encoding.default_external)
+      @writer.set_encoding(@r_info[:encoding])
+      @reader.set_encoding(@r_info[:encoding], Encoding.default_external, {:undef => :replace})
       @r_data_types.collect!{|type|
         next type unless type == @r_character
         @r_character = type.set_locale(@r_info[:encoding])
@@ -1053,7 +1053,6 @@ print('#{RinRuby_Eval_Flag}.#{run_num}')
     res = false
     t = Thread::new{
       while (line = @reader.gets)
-        # TODO I18N; force_encoding('origin').encode('UTF-8')
         case (stripped = line.gsub(/\x1B\[[0-?]*[ -\/]*[@-~]/, '')) # drop escape sequence
         when /\"#{RinRuby_Eval_Flag}\.(\d+)\"/
           next if $1.to_i != run_num
