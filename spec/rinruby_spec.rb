@@ -421,6 +421,44 @@ shared_examples 'RinRubyCore' do
     end
   end
   
+  describe "m17n capability" do
+    it "should correspond to R capability" do
+      l10n_info = Hash[*([:names, :unlist].collect{|k| 
+        r.pull("#{k}(l10n_info())")
+      }.transpose.flatten)]
+      expect(l10n_info.keys).to include("UTF-8", "Latin-1")
+    end
+    describe "of UTF-8" do
+      it "should pull" do
+        r.assign("x", String::UTF8_3B_CHARACTERS.unpack("U*"))
+        r.eval("x <- intToUtf8(x)")
+        expect(r.pull("x").encode("UTF-8")).to eql(String::UTF8_3B_CHARACTERS)
+      end
+      it "should assign" do
+        str_in = if r.pull("paste(version$major, version$minor, sep='.')") < "3.4.3" then
+          # @see https://www.rdocumentation.org/packages/base/versions/3.4.3/topics/utf8Conversion
+          (String::UTF8_3B_CHARACTERS.unpack("U*") - [0xFFFE, 0xFFFF]).pack("U*")
+        else
+          String::UTF8_3B_CHARACTERS
+        end
+        r.assign("x", str_in)
+        expect(r.pull("Encoding(x)")).to eql(r.pull("l10n_info()$\"UTF-8\"") ? "unknown" : "UTF-8")
+        expect(r.pull("utf8ToInt(x)")).to eql(str_in.unpack("U*")) 
+      end
+    end
+    describe "of Latin-1" do
+      it "should pull" do
+        r.eval("x <- rawToChar(as.raw(1:255)); Encoding(x) <- 'latin1'")
+        expect(r.pull("x").encode("CP1252").unpack("C*")).to eql((1..255).to_a)
+      end
+      it "should assign" do
+        r.assign("x", (1..255).to_a.pack("C*").force_encoding("CP1252"))
+        expect(r.pull("Encoding(x)")).to eql(r.pull("l10n_info()$'Latin-1'") ? "unknown" :"latin1")
+        expect(r.pull("as.integer(charToRaw(x))")).to eql((1..255).to_a)
+      end
+    end
+  end
+  
   describe "echo changes eval output" do
     def check_output(echo_args, stdout, stderr)
       r.echo(*echo_args)

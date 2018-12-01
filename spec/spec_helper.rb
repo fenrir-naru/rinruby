@@ -31,6 +31,6 @@ class String
   def deindent
     gsub /^[ \t]*/, '' 
   end
+  
+  UTF8_3B_CHARACTERS = (1..(0xFFFF)).reject{|i| (i >= 0xD800) && (i < 0xE000)}.pack("U*")
 end
-
-

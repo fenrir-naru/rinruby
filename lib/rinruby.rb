@@ -169,6 +169,15 @@ class RinRuby
     [:socket_io, :assign, :pull, :check].each{|fname| self.send("r_rinruby_#{fname}")}
     @writer.flush
     
+    @r_data_types = [
+      R_Logical,
+      R_Integer,
+      R_Double,
+      R_Complex,
+      R_Character,
+    ]
+    @r_character = R_Character
+    
     @eval_count = 0
     eval("0", false) # cleanup @reader
     
@@ -176,6 +185,32 @@ class RinRuby
     # To continue when R error occurs, an error handler is added as a workaround  
     # @see https://stat.ethz.ch/R-manual/R-devel/library/base/html/stop.html
     eval("options(error=dump.frames)") if @platform =~ /^(?!windows-).*java$/
+    
+    @r_info = get_r_info
+    if @r_info[:encoding] then
+      @writer.puts("#{RinRuby_Env}$char.transcoder(T)")
+      @writer.set_encoding(@r_info[:encoding])
+      @reader.set_encoding(@r_info[:encoding], Encoding.default_external, {:undef => :replace})
+      @r_data_types.collect!{|type|
+        next type unless type == @r_character
+        @r_character = type.set_locale(@r_info[:encoding])
+      }
+    end
+  end
+  
+  def get_r_info
+    {
+      # Encoding setup (Ruby >= 1.9.0)
+      :encoding => (Encoding::find(
+          case pull("options()$encoding")
+            when /utf-?8/i then "UTF-8"
+            when 'native.enc'
+              case pull("Sys.getlocale('LC_CTYPE')")
+              when /\.UTF-8/i then "UTF-8"
+              when /\.(\d+)$/ then "CP#{$1}"
+              end
+          end) rescue nil),
+    }
   end
 
 #The quit method will properly close the bridge between Ruby and R, freeing up system resources. This method does not need to be run when a Ruby script ends.
@@ -464,6 +499,7 @@ class RinRuby
   RinRuby_Socket = "#{RinRuby_Env}$socket"
   RinRuby_Test_String = "#{RinRuby_Env}$test.string"
   RinRuby_Test_Result = "#{RinRuby_Env}$test.result"
+  RinRuby_Encodings = ["unknown", "UTF-8", ["latin1", "CP1252"]]
   
   RinRuby_Eval_Flag = "RINRUBY.EVAL.FLAG"
   
@@ -495,6 +531,28 @@ class RinRuby
           })
         })
       }
+      #{RinRuby_Env}$char.transcoder <- function(m17n = F){
+        if(m17n){
+          encodings <- list(#{RinRuby_Encodings.collect.with_index{|v, i| 
+            "\"#{v.kind_of?(Array) ? v[0] : v}\" = \"\\x#{i+1}\""
+          }.join(',')})
+          assign("char.decode", function(char){
+                Encoding(char) <- names(encodings[encodings %in% substring(char, 1, 1)])[[1]]
+                invisible(substring(char, 2))
+              }, envir=#{RinRuby_Env})
+          assign("char.encode", function(char){
+                head <- encodings[[Encoding(char)]]
+                Encoding(char) <- "bytes"
+                invisible(paste0(head, char))
+              }, envir=#{RinRuby_Env})
+        }else{
+          pass_through <- function(char){char}
+          assign("char.decode", pass_through, envir=#{RinRuby_Env})
+          assign("char.encode", pass_through, envir=#{RinRuby_Env})
+        }
+        invisible(T)
+      }
+      #{RinRuby_Env}$char.transcoder(F)
     EOF
   end
   
@@ -568,7 +626,7 @@ class RinRuby
           value <- character(length)
           for(i in seq_len(length)){
             nbytes <- read(integer, 1)
-            value[[i]] <- ifelse(nbytes >= 0, readchar(nbytes), NA)
+            value[[i]] <- ifelse(nbytes >= 0, #{RinRuby_Env}$char.decode(readchar(nbytes)), NA)
           }
         }
         value
@@ -606,6 +664,7 @@ class RinRuby
           if( is.na(i) ){
             write(as.integer(NA))
           }else{
+            i <- #{RinRuby_Env}$char.encode(i)
             write(nchar(i, type="bytes"), i)
           }
         }
@@ -806,27 +865,63 @@ class RinRuby
           (x == nil) || x.kind_of?(String)
         }
       end
-      def send(value, io)
+      def send(value, io, &conv_proc)
+        conv_proc ||= proc{|str| str.bytes.pack('C*')} # .bytes.pack("C*").encoding equals to "ASCII-8BIT"
         # Character format: data_size, data1_bytes, data1, data2_bytes, data2, ...
         io.write([value.size].pack('l'))
         value.each{|x|
           if x then
-            bytes = x.to_s.bytes # TODO: taking care of encoding difference
-            io.write(([bytes.size] + bytes).pack('lC*')) # .bytes.pack("C*").encoding equals to "ASCII-8BIT"
+            bytes = conv_proc.call(x.to_s)
+            io.write([bytes.size].pack('l'))
+            io.write(bytes) 
           else
             io.write([RinRuby_NA_R_Integer].pack('l'))
           end
         }
         value
       end
-      def receive(io)
+      def receive(io, &conv_proc)
+        conv_proc ||= proc{|str| str}
         length = io.read(4).unpack('l').first
         Array.new(length){|i|
           nchar = io.read(4).unpack('l')[0]
           # negative nchar means NA, and "+ 1" for zero-terminated string
-          (nchar >= 0) ? io.read(nchar + 1)[0..-2] : nil
+          (nchar >= 0) ? conv_proc.call(io.read(nchar + 1)[0..-2]) : nil
         }
       end
+    end
+    
+    def self.set_locale(r_enc)
+      (@cache_set_locale ||= {})[r_enc] ||= Class::new(self){|cls|
+        encodings = RinRuby_Encodings.collect{|v|
+          next r_enc if v == "unknown"
+          Encoding::find(v.kind_of?(Array) ? v[1] : v)
+        }
+        singleton_class.send(:define_method, :encodings){encodings} # equivalent to define_singleton_method
+        singleton_class.send(:undef_method, :set_locale)
+        def cls.send(value, io)
+          # Encoding conversion policy from Ruby to R
+          # If target is in either R LC_CTYPE, UTF-8, or latin1(CP1252), then no conversion occurs.
+          # Otherwise, conversions to R LC_CTYPE, UTF-8, and latin1(CP1252) are made in order until success.
+          super(value, io){|str|
+            str_encoded = str
+            idx = encodings.index(str.encoding)
+            idx ||= encodings.index{|enc|
+              str_encoded = str.encode(enc) rescue nil
+            }
+            ([idx + 1].pack("C") + str_encoded).force_encoding(Encoding::ASCII_8BIT)
+          }
+        end
+        def cls.receive(io)
+          # Encoding conversion policy from R to Ruby
+          # Conversion to Ruby default external encoding is actively attempted
+          # If failure, no conversion is made
+          super(io){|str|
+            res = str[1..-1].force_encoding(encodings[str.unpack("C")[0] - 1])
+            res.encode(Encoding::default_external) rescue res
+          }
+        end
+      }
     end
   end
   
@@ -845,13 +940,7 @@ class RinRuby
       value = [value]
     end
     
-    r_type ||= [
-      R_Logical,
-      R_Integer,
-      R_Double,
-      R_Complex,
-      R_Character,
-    ].find{|k|
+    r_type ||= @r_data_types.find{|k|
       k === value
     }
     raise "Unsupported data type on Ruby's end" unless r_type
@@ -885,13 +974,7 @@ class RinRuby
             false)
       end
       
-      r_type = [
-        R_Logical,
-        R_Integer,
-        R_Double,
-        R_Complex,
-        R_Character,
-      ].find{|k|
+      r_type = @r_data_types.find{|k|
         k::ID == type
       }
       
@@ -906,7 +989,7 @@ class RinRuby
   end
 
   def if_passed(string, r_func, opt = {}, &then_proc)
-    assign_engine("#{RinRuby_Env}$assign.test.string", string, R_Character)
+    assign_engine("#{RinRuby_Env}$assign.test.string", string, @r_character)
     res = socket_session{|socket|
       @writer.puts "#{RinRuby_Test_Result} <- #{r_func}(#{RinRuby_Test_String})"
       @writer.flush
@@ -970,7 +1053,6 @@ print('#{RinRuby_Eval_Flag}.#{run_num}')
     res = false
     t = Thread::new{
       while (line = @reader.gets)
-        # TODO I18N; force_encoding('origin').encode('UTF-8')
         case (stripped = line.gsub(/\x1B\[[0-?]*[ -\/]*[@-~]/, '')) # drop escape sequence
         when /\"#{RinRuby_Eval_Flag}\.(\d+)\"/
           next if $1.to_i != run_num
